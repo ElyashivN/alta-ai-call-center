@@ -31,9 +31,9 @@ def main() -> None:
         )
         if not lead:
             lead = Lead(
-                name="Elyashiv Newman",
-                phone="+972546688243",
-                email="elyashiv.newman@mail.huji.ac.il",
+                name="<INSERT-YOUR-NAME>",
+                phone="+<INSERT-YOUR-PHONE->",
+                email="<INSERT-YOUR-EMAIL>",
                 company="Manual Demo",
                 timezone="Asia/Jerusalem",
             )
