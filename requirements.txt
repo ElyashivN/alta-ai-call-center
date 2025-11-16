@@ -1,0 +1,15 @@
+fastapi
+pydantic-settings
+uvicorn[standard]
+sqlalchemy
+alembic
+pydantic
+python-dotenv
+httpx
+pytest
+pytest-asyncio
+twilio
+python-multipart
+tzdata
+datetime
+openai>=1.35.0

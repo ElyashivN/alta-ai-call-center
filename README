@@ -1,0 +1,177 @@
+## AI Features & OpenAI Integration
+
+This project includes a few light, production-style AI integrations. All of them are **optional** and fully guarded behind environment variables so tests and basic flows work even without any external services.
+
+### Where AI is used
+
+1. **Natural-language scheduling constraints**
+   Endpoint: `POST /constraints/parse`
+   - Input: a sentence like
+     `"Try to book in the next two weeks, preferably Tue–Thu mornings"`.
+   - Behavior:
+     - If `OPENAI_API_KEY` is set, the service uses OpenAI (via the official Python SDK) to parse this into a structured JSON of:
+       - `hard_constraints` → time window + timezone
+       - `soft_constraints` → preferred days of week / time of day
+     - If the key is **not** set, a deterministic heuristic parser is used instead (this is what the tests rely on).
+
+2. **Availability parsing from call transcripts (Twilio)**
+   Endpoint: `POST /twilio/voice/gather`
+   - Twilio sends ASR transcripts or DTMF input from the live call.
+   - If `OPENAI_API_KEY` is set, the transcript is parsed into one or more concrete availability slots inside the requested window, which are stored as `ParticipantAvailability` rows.
+   - If not, a simple fallback heuristic is used.
+
+3. **Dynamic call script generation for IVR**
+   - When an outbound call is answered (`/twilio/voice`), the bot speaks a script inviting the lead to share availability.
+   - If `OPENAI_API_KEY` is set, the script can be lightly personalized by OpenAI (short, friendly, single paragraph).
+   - If not, a fixed hard-coded script is used.
+
+### How to turn AI features on
+
+1. Install dependencies (OpenAI + tzdata, if not already):
+
+   ```bash
+   pip install openai tzdata
+
+
+
+Ownership & Legal Notice
+
+Unless otherwise noted in specific files:
+
+Copyright © 2025 Elyashiv Newman. All rights reserved.
+
+This repository (code, configuration, and documentation) was created by Elyashiv Newman
+as part of a technical assignment.
+
+All original source code, scripts, and accompanying materials in this project are the intellectual property of
+ Elyashiv Newman, and may not be copied, reused, or distributed without explicit permission,
+ except where reuse is clearly allowed by referenced third-party licenses (e.g., libraries in requirements.txt).
+
+If you intend to reuse or redistribute any part of this project beyond reviewing it for the assignment,
+please contact me for permission, at elyashiv.newman@mail.huji.ac.il
+
+## Architecture overview
+
+This project implements an AI-assisted outbound call center that books meetings for account managers.
+
+The core flow follows this architecture:
+
+**UI / Client → API → Scheduler Worker → Outbound Orchestrator → Twilio → Optimizer**
+
+- **API (FastAPI)**
+  - `/meeting-requests`: define what needs to be booked (owner, duration, constraints).
+  - `/campaigns`: attach leads to a meeting request.
+  - `/calls/*`: internal helpers for test / manual calls.
+  - `/twilio/*`: webhooks for Twilio voice + status callbacks.
+  - `/constraints/parse`: uses LLM-style parsing for natural language constraints.
+
+- **Scheduler / Workers (scripts)**
+  - `scripts/manual_call_demo.py`: end-to-end manual demo that creates a lead + meeting request and calls a real phone.
+  - `scripts/scheduler_tick.py` (optional pattern): batch-selects leads for a meeting request and hands them to the orchestrator.
+
+- **Outbound Orchestrator**
+  - Selects which leads to call next for a given meeting request.
+  - Uses `call_service.initiate_outbound_call` to create `Call` rows and trigger Twilio outbound calls.
+
+- **Twilio integration**
+  - `/twilio/voice`: initial answer webhook – plays a short script and starts a `<Gather>`.
+  - `/twilio/voice/gather`: receives speech/DTMF; converts it into availability windows (`ParticipantAvailability`).
+  - `/twilio/status`: receives Twilio call status callbacks to keep `Call` records in sync.
+
+- **Optimizer / Scheduling**
+  - `/meeting-requests/{id}/confirm-best-slot`: runs the optimization service over all collected availability and picks the best slot.
+
+The entire flow is covered by tests (pytest), except for the manual scripts that deliberately hit real Twilio and OpenAI.
+
+
+## Running the system from the command line
+
+### 1. Set environment variables
+
+Example (PowerShell on Windows, from repo root):
+
+```powershell
+# Database
+$env:DATABASE_URL = "sqlite:///./app.db"
+
+# Twilio
+$env:TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+$env:TWILIO_AUTH_TOKEN   = "your_auth_token_here"
+$env:TWILIO_FROM_NUMBER  = "+1XXXXXXXXXX"
+$env:TWILIO_VOICE_URL    = "https://<your-ngrok-id>.ngrok.io/twilio/voice"
+
+# OpenAI (optional – if not set, deterministic fallbacks are used)
+$env:OPENAI_API_KEY = "sk-proj-xxxxxxxxxxxxxxxx"
+
+
+2. Start the API
+(.venv) uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+3. Create a meeting request (HTTP client / CLI)
+
+Example using HTTPie:
+
+http POST :8000/meeting-requests `
+  owner_id="am-cli" `
+  title="CLI demo meeting" `
+  duration_minutes:=30 `
+  max_bookings:=3 `
+  hard_constraints:='{
+    "window_start": "2025-01-01T09:00:00+02:00",
+    "window_end":   "2025-01-01T17:00:00+02:00",
+    "timezone":     "Asia/Jerusalem"
+  }'
+
+
+For natural-language constraints, you can first call:
+
+http POST :8000/constraints/parse `
+  instruction="Try to book in the next two weeks, preferably Tue–Thu mornings" `
+  timezone="Asia/Jerusalem"
+
+
+and then reuse the returned hard_constraints / soft_constraints.
+
+4. Attach leads (campaigns)
+http POST :8000/campaigns `
+  name="CLI demo campaign" `
+  meeting_request_id:=<MEETING_REQUEST_ID> `
+  leads:='[
+    {"name": "Alice", "phone": "+111111111", "email": "alice@example.com", "timezone": "Asia/Jerusalem"},
+    {"name": "Bob",   "phone": "+222222222", "email": "bob@example.com",   "timezone": "Europe/London"}
+  ]'
+
+5. Run workers / orchestrator
+
+Single-lead manual demo (real phone call):
+
+(.venv) python -m scripts.manual_call_demo
+
+
+This script:
+
+Inserts a Lead (currently configured with my phone number, +972546688243).
+
+Creates a MeetingRequest with a short window.
+
+Uses TwilioClient + initiate_outbound_call to place a real call.
+
+Twilio hits /twilio/voice → /twilio/voice/gather.
+
+The transcript/DTMF is parsed into ParticipantAvailability rows.
+
+Batch scheduler pattern (optional worker):
+
+(.venv) python -m scripts.scheduler_tick --meeting-request-id <ID> --max-calls 10
+
+
+This worker selects a batch of eligible leads for that meeting request and passes them to the OutboundOrchestrator, which triggers outbound calls via Twilio.
+
+6. Confirm the best slot (optimization)
+
+After enough availability is collected:
+
+http POST :8000/meeting-requests/<ID>/confirm-best-slot
+
+
+The response includes the chosen slot (start/end) and updates the meeting status.

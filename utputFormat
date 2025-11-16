@@ -1,0 +1,7 @@
+HTTP/1.1 422 Unprocessable Entity
+date: Sat, 15 Nov 2025 20:42:50 GMT
+server: uvicorn
+content-length: 124
+content-type: application/json
+
+{"detail":[{"type":"json_invalid","loc":["body",0],"msg":"JSON decode error","input":{},"ctx":{"error":"Expecting value"}}]}
